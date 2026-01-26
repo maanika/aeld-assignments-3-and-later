@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 if [ $# -ne 2 ]; then
 	echo "ERROR: Invalid number of arguments ($?), expecting 2"
