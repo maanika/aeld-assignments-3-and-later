@@ -21,7 +21,7 @@ int main(int argc, char* argv[])
 	syslog(LOG_INFO, "Writing \"%s\" to %s", writestr, writefile);
 
 	int fd;
-	fd = open(writefile, O_WRONLY | O_CREAT | O_TRUNC);
+	fd = open(writefile, O_WRONLY | O_CREAT | O_TRUNC, 0755);
 	if (fd == -1) {
  		syslog(LOG_ERR, "Failed to open file");
 		closelog();
