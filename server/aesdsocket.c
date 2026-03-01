@@ -98,7 +98,7 @@ static void send_client(const int client_fd, const char *file_path)
 	while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
 		const int bytes_sent = send(client_fd, buffer, bytes_read, 0);
 		if (bytes_sent != bytes_read) {
-			fprintf(stderr,
+			syslog(LOG_ERR,
 				"send_client: bytes read from file != bytes sent to client");
 			// todo: handle
 		}
@@ -116,18 +116,16 @@ void *get_in_addr(const struct sockaddr *sa)
 	return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
-#define MAX_RECV_BUFFER 20000
+#define MAX_RECV_SIZE 10
 
 static int handle_connection(const int client_fd, const struct sockaddr_storage *client_addr,
 			     const char *file)
 {
 	char ip[INET6_ADDRSTRLEN] = {0};
-	char recv_buffer[MAX_RECV_BUFFER] = {0};
 
 	inet_ntop(client_addr->ss_family, get_in_addr((struct sockaddr *)client_addr), ip,
 		  sizeof(ip));
 
-	printf("connection from %s\n", ip);
 	syslog(LOG_INFO, "Accepted connection from %s\n", ip);
 
 	const int fd = open(file, O_CREAT | O_APPEND | O_RDWR, 0644);
@@ -136,31 +134,45 @@ static int handle_connection(const int client_fd, const struct sockaddr_storage 
 		return -1;
 	}
 
-	int bytes_recv = 0;
-	int bytes_remaining = 0;
-	while ((bytes_recv = recv(client_fd, recv_buffer + bytes_remaining,
-				  sizeof(recv_buffer) - 1 - bytes_remaining, 0)) > 0) {
-		bytes_remaining = strlen(recv_buffer);
-		// printf("bytes_remaining = %d\nstarting processing\n", bytes_remaining);
-		while (1) {
-			const char *end = memchr(recv_buffer, '\n', bytes_remaining);
-			if (end == NULL) {
-				break;
-			}
-			const int len = end - recv_buffer + 1;
-			int bytes_written = write(fd, recv_buffer, len);
-			if (bytes_written == -1) {
+	char *buffer = calloc(MAX_RECV_SIZE, sizeof(char));
+
+	int bytes = 0;
+	int bytes_read = 0;
+
+	while ((bytes = recv(client_fd, buffer + bytes_read, MAX_RECV_SIZE, 0)) > 0) {
+		bytes_read += bytes;
+
+		char *end = memchr(buffer, '\n', bytes_read);
+		if (end != NULL) {
+			// process bytes until new line
+			const int str_len = end - buffer + 1;
+			char *str = malloc(str_len);  // extra one for '\0'
+			memset(str, 0, str_len);
+			strncpy(str, buffer, str_len - 1); // ignore new line when printing and leave it for NULL
+			syslog(LOG_INFO, "received message: %s\n", str);
+
+            if (write(fd, buffer, str_len) == -1) {
 				perror("write");
 				break;
 			}
+			free(str);
+			str = NULL;
+
 			send_client(client_fd, file);
-			bytes_remaining -= len;
-			memmove(recv_buffer, recv_buffer + len, bytes_remaining);
-			// printf("bytes_remaining = %d\n", bytes_remaining);
+
+			// move the remaining bytes to the front and realloc array
+			bytes_read = bytes_read - str_len; // data after '\n'
+			memmove(buffer, end + 1, bytes_read);
+			buffer = reallocarray(buffer, bytes_read, sizeof(char));
 		}
+
+		buffer = reallocarray(buffer, bytes_read + MAX_RECV_SIZE, sizeof(char));
 	}
-	printf("closed connection from %s\n", ip);
-	syslog(LOG_INFO, "Closed connection from %s\n", ip);
+
+	free(buffer);
+	buffer = NULL;
+
+    syslog(LOG_INFO, "Closed connection from %s\n", ip);
 
 	close(fd);
     close(client_fd);
@@ -172,14 +184,14 @@ int main(int argc, char **argv)
     bool daemon_mode = false;
     if ((argc == 2) && (strncmp(argv[1], "-d", strlen("-d"))) == 0) {
         daemon_mode = true;
-        printf("running in daemon mode\n");
+        syslog(LOG_INFO, "running in daemon mode\n");
     }
 
 	openlog("aesdsocket", 0, LOG_USER);
 
 	const int server_fd = setup_server(PORT);
 	if (server_fd == -1) {
-		fprintf(stderr, "setup server failed\n");
+		syslog(LOG_ERR, "setup server failed\n");
 		return 1;
 	}
 
@@ -203,7 +215,7 @@ int main(int argc, char **argv)
         close(STDERR_FILENO);
     }
 
-	printf("server: waiting for connections...\n");
+	syslog(LOG_INFO, "server: waiting for connections...\n");
 
 	struct sigaction sig_action;
 	memset(&sig_action, 0, sizeof(sig_action));
