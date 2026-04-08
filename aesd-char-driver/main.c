@@ -62,11 +62,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 static void write_circular_buffer_packet(struct aesd_circular_buffer *buffer,
                                          const char *writestr, const size_t count)
 {
-    struct aesd_buffer_entry entry;
-    entry.buffptr = writestr;
-    entry.size = count;
+    struct aesd_buffer_entry entry = {
+        .buffptr = writestr,
+        .size = count,
+    };
+
     PDEBUG("Adding %s (len %d) to circular buffer", entry.buffptr, (int)entry.size);
-    aesd_circular_buffer_add_entry(buffer, &entry);
+
+    const struct aesd_buffer_entry* free_entry = aesd_circular_buffer_add_entry(buffer, &entry);
+    if (free_entry != NULL) {
+        kfree(free_entry);
+    }
 }
 
 static void print_circular_buffer(struct aesd_circular_buffer *buffer)
