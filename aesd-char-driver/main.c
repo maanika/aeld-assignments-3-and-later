@@ -85,10 +85,15 @@ static void print_circular_buffer(struct aesd_circular_buffer *buffer)
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    struct aesd_dev *dev = (struct aesd_dev*) filp->private_data;
+
+    if (mutex_lock_interruptible(&dev->lock) != 0) {
+        return -ERESTARTSYS;
+    }
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
 
+    ssize_t retval = 0;
     const size_t str_len = count + 1; // +1 for NULL terminating
 
     char *writestr = kmalloc(str_len, GFP_KERNEL);
@@ -103,17 +108,12 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         goto exit;
     }
 
-    struct aesd_dev *dev = (struct aesd_dev*) filp->private_data;
-
-    PDEBUG("writestr: %s", writestr);
-
     write_circular_buffer_packet(&(dev->circular_buffer), writestr, str_len);
-
     retval = count;
 
-    print_circular_buffer(&(dev->circular_buffer));
-
 exit:
+    print_circular_buffer(&(dev->circular_buffer));
+    mutex_unlock(&dev->lock);
     return retval;
 }
 
