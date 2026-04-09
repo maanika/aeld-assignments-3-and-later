@@ -106,56 +106,42 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 
 	if (new_write) {
 		PDEBUG("New write");
-
 		dev->write_str = kmalloc(str_len, GFP_KERNEL);
-		if (dev->write_str == NULL) {
-			retval = -ENOMEM;
-			goto exit;
-		}
-		memset(dev->write_str, 0, str_len);
-
-		// copying one less than str_len to keep NULL terminating
-		if (copy_from_user(dev->write_str, buf, count)) {
-			kfree(dev->write_str);
-			retval = -EFAULT;
-			goto exit;
-		}
-
-		if (dev->write_str[count - 1] == '\n') { // -1 because arrary indexing starts from 0.
-			PDEBUG("Write string complete");
-			write_circular_buffer_packet(&(dev->circular_buffer), dev->write_str,
-						     str_len);
-
-			// reset write info
-			dev->write_str = NULL;
-			dev->write_len = 0;
-			dev->partial_write = false;
-
-		} else {
-			// set write info next write
-			dev->partial_write = true;
-			dev->write_len = count;
-		}
-
 	} else {
 		PDEBUG("Conituning a partial write");
-		// continuation of a partial write
+		// we already allocated a byte for NULL terminator.
+		dev->write_str = krealloc(dev->write_str, dev->write_len + count, GFP_KERNEL);
 	}
 
-	// char *writestr = kmalloc(str_len, GFP_KERNEL);
-	// if (!writestr) {
-	// 	retval = -ENOMEM;
-	// 	goto exit;
-	// }
-	// memset(writestr, 0, str_len);
-	//
-	// if (copy_from_user(writestr, buf,
-	// 		   count)) { // copying one less than str_len to keep NULL terminating
-	// 	retval = -EFAULT;
-	// 	goto exit;
-	// }
-	//
-	// write_circular_buffer_packet(&(dev->circular_buffer), writestr, str_len);
+	if (dev->write_str == NULL) {
+		retval = -ENOMEM;
+		goto exit;
+	}
+	memset(dev->write_str + dev->write_len, 0, str_len);
+
+	if (copy_from_user(dev->write_str + dev->write_len, buf, count)) {
+		kfree(dev->write_str);
+		retval = -EFAULT;
+		goto exit;
+	}
+
+	// update len after copying from user buffer (new offset)
+	dev->write_len += count;
+
+	// -1 because arrary indexing starts from 0.
+	if (dev->write_str[dev->write_len - 1] == '\n') {
+		PDEBUG("Write string complete");
+		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_str, str_len);
+
+		// reset write info
+		dev->write_str = NULL;
+		dev->write_len = 0;
+		dev->partial_write = false;
+
+	} else {
+		// set write info next write
+		dev->partial_write = true;
+	}
 
 	retval = count;
 
