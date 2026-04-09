@@ -31,7 +31,13 @@ struct write_info {
 	size_t len;
 };
 
+struct read_info {
+	size_t read_len;
+    bool complete;
+};
+
 struct aesd_dev {
+	struct read_info read_info;
 	struct write_info write_info;
 	struct aesd_circular_buffer circular_buffer;
 	struct mutex lock;

@@ -46,14 +46,61 @@ static int aesd_release(struct inode *inode, struct file *filp)
 
 static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
-	ssize_t retval = 0;
-
 	PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
-	// handle read
-	PDEBUG("Reading ...");
+	ssize_t retval = -ENOMEM;
+	struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
-	retval = count;
+    if (dev->read_info.complete) {
+        dev->read_info.complete = false;
+        return 0;
+    }
+
+	// handle read
+	size_t offset_rtn = 0;
+
+    // should this be at the top (before private_data gets assigned) ????? TBC
+	if (mutex_lock_interruptible(&dev->lock) != 0) {
+		return -ERESTARTSYS;
+	}
+
+    dev->read_info.read_len = 0;
+    size_t read_offset = 0;
+
+	while (dev->read_info.read_len < count) {
+		struct aesd_buffer_entry *read_entry =
+			aesd_circular_buffer_find_entry_offset_for_fpos(
+				&(dev->circular_buffer), *f_pos + read_offset, // something buggy here
+				&offset_rtn);
+		if (read_entry == NULL) {
+            // end of circular buffer
+			goto exit;
+		}
+
+		const size_t len = min(count - dev->read_info.read_len, read_entry->size);
+		if (len == 0) {
+			goto exit;
+		}
+
+		PDEBUG("Found entry %s, attempting to copy %zu bytes to user buffer",
+		       read_entry->buffptr, len);
+		if (copy_to_user(buf + dev->read_info.read_len, read_entry->buffptr, len)) {
+			goto exit;
+		}
+
+		PDEBUG("Saved entry %s", read_entry->buffptr);
+
+		dev->read_info.read_len += len; // offset starts from 0
+        read_offset += (len - 1);
+
+		PDEBUG("len total %zu", dev->read_info.read_len);
+	}
+
+exit:
+    retval = dev->read_info.read_len;
+    dev->read_info.complete = true;
+
+	mutex_unlock(&dev->lock);
 
 	return retval;
 }
@@ -68,9 +115,9 @@ static void write_circular_buffer_packet(struct aesd_circular_buffer *buffer, co
 
 	PDEBUG("Adding %s (len %zu) to circular buffer", entry.buffptr, entry.size);
 
-	const struct aesd_buffer_entry *free_entry = aesd_circular_buffer_add_entry(buffer, &entry);
-	if (free_entry != NULL) {
-		kfree(free_entry);
+	const char *free_bufferptr = aesd_circular_buffer_add_entry(buffer, &entry);
+	if (free_bufferptr != NULL) {
+		kfree(free_bufferptr);
 	}
 }
 
@@ -90,13 +137,16 @@ static void print_circular_buffer(struct aesd_circular_buffer *buffer)
 
 static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
+	// f_pos is ignored, we will be writing to the circular buffer's implentation of the next
+	// free slot.
+
 	struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
 	if (mutex_lock_interruptible(&dev->lock) != 0) {
 		return -ERESTARTSYS;
 	}
 
-	PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
+	PDEBUG("write %zu bytes with offset %lld (ignored)", count, *f_pos);
 
 	ssize_t retval = 0;
 	const size_t str_len = count + 1; // +1 for NULL terminating
@@ -186,6 +236,11 @@ static int aesd_init_module(void)
 
 	// initialize the AESD specific portion of the device
 	PDEBUG("Initializing AESD device...");
+
+	// initialise read info
+	aesd_device.read_info.read_len = 0;
+    aesd_device.read_info.complete = false;
+
 	// initialise write info
 	aesd_device.write_info.str = NULL;
 	aesd_device.write_info.len = 0;
