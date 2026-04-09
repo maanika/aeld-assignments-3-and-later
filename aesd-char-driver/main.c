@@ -101,46 +101,47 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	ssize_t retval = 0;
 	const size_t str_len = count + 1; // +1 for NULL terminating
 
-	const bool new_write =
-		(dev->write_str == NULL) & (!dev->partial_write) & (dev->write_str == 0);
+	const bool new_write = (dev->write_info.str == NULL) & (!dev->write_info.partial_flag) &
+			       (dev->write_info.str == 0);
 
 	if (new_write) {
 		PDEBUG("New write");
-		dev->write_str = kmalloc(str_len, GFP_KERNEL);
+		dev->write_info.str = kmalloc(str_len, GFP_KERNEL);
 	} else {
 		PDEBUG("Conituning a partial write");
 		// we already allocated a byte for NULL terminator.
-		dev->write_str = krealloc(dev->write_str, dev->write_len + count, GFP_KERNEL);
+		dev->write_info.str =
+			krealloc(dev->write_info.str, dev->write_info.len + count, GFP_KERNEL);
 	}
 
-	if (dev->write_str == NULL) {
+	if (dev->write_info.str == NULL) {
 		retval = -ENOMEM;
 		goto exit;
 	}
-	memset(dev->write_str + dev->write_len, 0, str_len);
+	memset(dev->write_info.str + dev->write_info.len, 0, str_len);
 
-	if (copy_from_user(dev->write_str + dev->write_len, buf, count)) {
-		kfree(dev->write_str);
+	if (copy_from_user(dev->write_info.str + dev->write_info.len, buf, count)) {
+		kfree(dev->write_info.str);
 		retval = -EFAULT;
 		goto exit;
 	}
 
 	// update len after copying from user buffer (new offset)
-	dev->write_len += count;
+	dev->write_info.len += count;
 
 	// -1 because arrary indexing starts from 0.
-	if (dev->write_str[dev->write_len - 1] == '\n') {
+	if (dev->write_info.str[dev->write_info.len - 1] == '\n') {
 		PDEBUG("Write string complete");
-		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_str, str_len);
+		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_info.str, str_len);
 
 		// reset write info
-		dev->write_str = NULL;
-		dev->write_len = 0;
-		dev->partial_write = false;
+		dev->write_info.str = NULL;
+		dev->write_info.len = 0;
+		dev->write_info.partial_flag = false;
 
 	} else {
-		// set write info next write
-		dev->partial_write = true;
+		// set write info for next write
+		dev->write_info.partial_flag = true;
 	}
 
 	retval = count;
@@ -186,9 +187,9 @@ static int aesd_init_module(void)
 	// initialize the AESD specific portion of the device
 	PDEBUG("Initializing AESD device...");
 	// initialise write info
-	aesd_device.write_str = NULL;
-	aesd_device.write_len = 0;
-	aesd_device.partial_write = false;
+	aesd_device.write_info.str = NULL;
+	aesd_device.write_info.len = 0;
+	aesd_device.write_info.partial_flag = false;
 
 	aesd_circular_buffer_init(&aesd_device.circular_buffer);
 	mutex_init(&aesd_device.lock);

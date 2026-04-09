@@ -25,13 +25,17 @@
 #define PDEBUG(fmt, args...) /* not debugging: nothing */
 #endif
 
+struct write_info {
+	char *str;
+	bool partial_flag;
+	size_t len;
+};
+
 struct aesd_dev {
-	char *write_str;
-	bool partial_write;
-	size_t write_len;
-    struct aesd_circular_buffer circular_buffer;
-    struct mutex lock;
-    struct cdev cdev;
+	struct write_info write_info;
+	struct aesd_circular_buffer circular_buffer;
+	struct mutex lock;
+	struct cdev cdev;
 };
 
 #endif /* AESD_CHAR_DRIVER_AESDCHAR_H_ */
