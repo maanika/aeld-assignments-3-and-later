@@ -66,7 +66,7 @@ static void write_circular_buffer_packet(struct aesd_circular_buffer *buffer, co
 		.size = count,
 	};
 
-	PDEBUG("Adding %s (len %d) to circular buffer", entry.buffptr, (int)entry.size);
+	PDEBUG("Adding %s (len %zu) to circular buffer", entry.buffptr, entry.size);
 
 	const struct aesd_buffer_entry *free_entry = aesd_circular_buffer_add_entry(buffer, &entry);
 	if (free_entry != NULL) {
@@ -84,7 +84,7 @@ static void print_circular_buffer(struct aesd_circular_buffer *buffer)
 		if (entry->buffptr == NULL) {
 			break;
 		}
-		PDEBUG("index: %d, value: %s, size: %d", index, entry->buffptr, (int)entry->size);
+		PDEBUG("index: %d, value: %s, size: %zu", index, entry->buffptr, entry->size);
 	}
 }
 
@@ -101,20 +101,62 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	ssize_t retval = 0;
 	const size_t str_len = count + 1; // +1 for NULL terminating
 
-	char *writestr = kmalloc(str_len, GFP_KERNEL);
-	if (!writestr) {
-		retval = -ENOMEM;
-		goto exit;
-	}
-	memset(writestr, 0, str_len);
+	const bool new_write =
+		(dev->write_str == NULL) & (!dev->partial_write) & (dev->write_str == 0);
 
-	if (copy_from_user(writestr, buf,
-			   count)) { // copying one less than str_len to keep NULL terminating
-		retval = -EFAULT;
-		goto exit;
+	if (new_write) {
+		PDEBUG("New write");
+
+		dev->write_str = kmalloc(str_len, GFP_KERNEL);
+		if (dev->write_str == NULL) {
+			retval = -ENOMEM;
+			goto exit;
+		}
+		memset(dev->write_str, 0, str_len);
+
+		// copying one less than str_len to keep NULL terminating
+		if (copy_from_user(dev->write_str, buf, count)) {
+			kfree(dev->write_str);
+			retval = -EFAULT;
+			goto exit;
+		}
+
+		if (dev->write_str[count - 1] == '\n') { // -1 because arrary indexing starts from 0.
+			PDEBUG("Write string complete");
+			write_circular_buffer_packet(&(dev->circular_buffer), dev->write_str,
+						     str_len);
+
+			// reset write info
+			dev->write_str = NULL;
+			dev->write_len = 0;
+			dev->partial_write = false;
+
+		} else {
+			// set write info next write
+			dev->partial_write = true;
+			dev->write_len = count;
+		}
+
+	} else {
+		PDEBUG("Conituning a partial write");
+		// continuation of a partial write
 	}
 
-	write_circular_buffer_packet(&(dev->circular_buffer), writestr, str_len);
+	// char *writestr = kmalloc(str_len, GFP_KERNEL);
+	// if (!writestr) {
+	// 	retval = -ENOMEM;
+	// 	goto exit;
+	// }
+	// memset(writestr, 0, str_len);
+	//
+	// if (copy_from_user(writestr, buf,
+	// 		   count)) { // copying one less than str_len to keep NULL terminating
+	// 	retval = -EFAULT;
+	// 	goto exit;
+	// }
+	//
+	// write_circular_buffer_packet(&(dev->circular_buffer), writestr, str_len);
+
 	retval = count;
 
 exit:
@@ -123,13 +165,11 @@ exit:
 	return retval;
 }
 
-struct file_operations aesd_fops = {
-	.owner = THIS_MODULE,
-	.read = aesd_read,
-	.write = aesd_write,
-	.open = aesd_open,
-	.release = aesd_release,
-};
+struct file_operations aesd_fops = {.owner = THIS_MODULE,
+				    .read = aesd_read,
+				    .write = aesd_write,
+				    .open = aesd_open,
+				    .release = aesd_release};
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
 {
@@ -159,6 +199,11 @@ static int aesd_init_module(void)
 
 	// initialize the AESD specific portion of the device
 	PDEBUG("Initializing AESD device...");
+	// initialise write info
+	aesd_device.write_str = NULL;
+	aesd_device.write_len = 0;
+	aesd_device.partial_write = false;
+
 	aesd_circular_buffer_init(&aesd_device.circular_buffer);
 	mutex_init(&aesd_device.lock);
 

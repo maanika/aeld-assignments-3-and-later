@@ -26,12 +26,12 @@
 #endif
 
 struct aesd_dev {
-	/**
-	 * TODO: Add structure(s) and locks needed to complete assignment requirements
-	 */
-	struct aesd_circular_buffer circular_buffer;
-	struct mutex lock;
-	struct cdev cdev;
+	char *write_str;
+	bool partial_write;
+	size_t write_len;
+    struct aesd_circular_buffer circular_buffer;
+    struct mutex lock;
+    struct cdev cdev;
 };
 
 #endif /* AESD_CHAR_DRIVER_AESDCHAR_H_ */
