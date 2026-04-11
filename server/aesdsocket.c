@@ -24,7 +24,12 @@
 #define MAX_RECV_SIZE 1024
 #define BUFFER_SIZE 1024
 
+#ifdef USE_AESD_CHAR_DEVICE
+const char *file = "/dev/aesdchar";
+#else
 const char *file = "/var/tmp/aesdsocket";
+#endif /* USE_AESD_CHAR_DEVICE */
+
 static volatile sig_atomic_t exit_requested = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -208,6 +213,7 @@ static void *handle_connection(void *args) {
   pthread_exit((void *)ret);
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 static bool timer_initialised = false;
 
 static void timer_thread(union sigval sigval) {
@@ -294,6 +300,7 @@ static void timer_deinit(timer_t timerid) {
   timer_delete(timerid);
   printf("Timer deleted ID is %#jx\n", (uint64_t)timerid);
 }
+#endif /* USE_AESD_CHAR_DEVICE */
 
 int main(int argc, char **argv) {
   bool daemon_mode = false;
@@ -329,8 +336,10 @@ int main(int argc, char **argv) {
     close(STDERR_FILENO);
   }
 
+#ifndef USE_AESD_CHAR_DEVICE
   timer_t timer_id;
   timer_init(&timer_id, 10);
+#endif /* USE_AESD_CHAR_DEVICE */
 
   syslog(LOG_INFO, "server: waiting for connections...\n");
 
@@ -411,9 +420,16 @@ int main(int argc, char **argv) {
     }
   }
 
+#ifndef USE_AESD_CHAR_DEVICE
   timer_deinit(timer_id);
+#endif /* USE_AESD_CHAR_DEVICE */
+
   close(server_fd);
+
+#ifndef USE_AESD_CHAR_DEVICE
   remove(file);
+#endif /* USE_AESD_CHAR_DEVICE */
+
   closelog();
 
   return 0;
