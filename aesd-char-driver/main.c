@@ -144,18 +144,18 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	PDEBUG("write %zu bytes with offset %lld (ignored)", count, *f_pos);
 
 	ssize_t retval = 0;
+    const size_t string_len = count + 1; // + 1 for NULL terminator
 
 	const bool new_write = (dev->write_info.str == NULL) & (!dev->write_info.partial_flag) &
 			       (dev->write_info.str == 0);
 	if (new_write) {
 		PDEBUG("New write");
-		dev->write_info.str = kmalloc(count + 1 , GFP_KERNEL); // + 1 for NULL terminator
+		dev->write_info.str = kmalloc(string_len , GFP_KERNEL);
 	} else {
 		PDEBUG("Conituning a partial write");
-		// we already allocated a byte for NULL terminator, so we only allocate count bytes
-		// more here.
+        // write.info.len is an accumilation of count.
 		dev->write_info.str =
-			krealloc(dev->write_info.str, dev->write_info.len + count + 1, GFP_KERNEL);
+			krealloc(dev->write_info.str, dev->write_info.len + string_len, GFP_KERNEL);
 	}
 
 	if (dev->write_info.str == NULL) {
@@ -163,14 +163,12 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 		goto exit;
 	}
 
-  
-	// Set newly allocated memory to 0.
-	memset(dev->write_info.str + dev->write_info.len, 0, count + 1);
-  
-    // index starts with 0, but we need to be careful here before -1 from len if len is 0.
-	const size_t write_offset = (dev->write_info.len > 0) ? dev->write_info.len - 1 : 0;
-    PDEBUG("write offset %zu", write_offset);
+    // NOTE: write_info.str + write_info.len will point to the NULL character always.
 
+	// Set newly allocated memory to 0.
+    // we are always allocating count + 1, and need to ensure the terminator is NULL.
+	memset(dev->write_info.str + dev->write_info.len, 0, string_len);
+  
 	if (copy_from_user(dev->write_info.str + dev->write_info.len, buf, count)) {
 		kfree(dev->write_info.str);
 		retval = -EFAULT;
@@ -179,8 +177,6 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 
 	// update len after copying from user buffer
 	dev->write_info.len += count;
-
-    PDEBUG("String we have now  %s", dev->write_info.str);
 
 	// check for packet complete character.
     // -1 because arrary indexing starts from 0.
