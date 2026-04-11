@@ -51,29 +51,29 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 	ssize_t retval = -ENOMEM;
 	struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
-    if (dev->read_info.complete) {
-        dev->read_info.complete = false;
-        return 0;
-    }
+	// This is for the case where you read and there is no more data to be read
+	// so you return the number of bytes read, and the next user call must
+	// see a return value of 0, indicating no more data to read.
+	if (dev->read_info.complete) {
+		dev->read_info.complete = false;
+		return 0;
+	}
 
-	// handle read
-	size_t offset_rtn = 0;
-
-    // should this be at the top (before private_data gets assigned) ????? TBC
 	if (mutex_lock_interruptible(&dev->lock) != 0) {
 		return -ERESTARTSYS;
 	}
 
-    dev->read_info.read_len = 0;
-    size_t read_offset = 0;
+	dev->read_info.read_len = 0;
+	size_t offset_return = 0;
 
-	while (dev->read_info.read_len < count) {
+	while (dev->read_info.read_len <= count) {
+		// -1 because offset starts from 0 (for each buffer entry).
 		struct aesd_buffer_entry *read_entry =
 			aesd_circular_buffer_find_entry_offset_for_fpos(
-				&(dev->circular_buffer), *f_pos + read_offset, // something buggy here
-				&offset_rtn);
+				&(dev->circular_buffer), *f_pos + dev->read_info.read_len,
+				&offset_return);
 		if (read_entry == NULL) {
-            // end of circular buffer
+			dev->read_info.complete = true;
 			goto exit;
 		}
 
@@ -90,18 +90,14 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 
 		PDEBUG("Saved entry %s", read_entry->buffptr);
 
-		dev->read_info.read_len += len; // offset starts from 0
-        read_offset += (len - 1);
+		dev->read_info.read_len += len;
 
 		PDEBUG("len total %zu", dev->read_info.read_len);
 	}
 
 exit:
-    retval = dev->read_info.read_len;
-    dev->read_info.complete = true;
-
+	retval = dev->read_info.read_len;
 	mutex_unlock(&dev->lock);
-
 	return retval;
 }
 
@@ -139,7 +135,6 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 {
 	// f_pos is ignored, we will be writing to the circular buffer's implentation of the next
 	// free slot.
-
 	struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
 	if (mutex_lock_interruptible(&dev->lock) != 0) {
@@ -149,26 +144,32 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	PDEBUG("write %zu bytes with offset %lld (ignored)", count, *f_pos);
 
 	ssize_t retval = 0;
-	const size_t str_len = count + 1; // +1 for NULL terminating
 
 	const bool new_write = (dev->write_info.str == NULL) & (!dev->write_info.partial_flag) &
 			       (dev->write_info.str == 0);
-
 	if (new_write) {
 		PDEBUG("New write");
-		dev->write_info.str = kmalloc(str_len, GFP_KERNEL);
+		dev->write_info.str = kmalloc(count + 1 , GFP_KERNEL); // + 1 for NULL terminator
 	} else {
 		PDEBUG("Conituning a partial write");
-		// we already allocated a byte for NULL terminator.
+		// we already allocated a byte for NULL terminator, so we only allocate count bytes
+		// more here.
 		dev->write_info.str =
-			krealloc(dev->write_info.str, dev->write_info.len + count, GFP_KERNEL);
+			krealloc(dev->write_info.str, dev->write_info.len + count + 1, GFP_KERNEL);
 	}
 
 	if (dev->write_info.str == NULL) {
 		retval = -ENOMEM;
 		goto exit;
 	}
-	memset(dev->write_info.str + dev->write_info.len, 0, str_len);
+
+  
+	// Set newly allocated memory to 0.
+	memset(dev->write_info.str + dev->write_info.len, 0, count + 1);
+  
+    // index starts with 0, but we need to be careful here before -1 from len if len is 0.
+	const size_t write_offset = (dev->write_info.len > 0) ? dev->write_info.len - 1 : 0;
+    PDEBUG("write offset %zu", write_offset);
 
 	if (copy_from_user(dev->write_info.str + dev->write_info.len, buf, count)) {
 		kfree(dev->write_info.str);
@@ -176,13 +177,16 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 		goto exit;
 	}
 
-	// update len after copying from user buffer (new offset)
+	// update len after copying from user buffer
 	dev->write_info.len += count;
 
-	// -1 because arrary indexing starts from 0.
-	if (dev->write_info.str[dev->write_info.len - 1] == '\n') {
-		PDEBUG("Write string complete");
-		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_info.str, str_len);
+    PDEBUG("String we have now  %s", dev->write_info.str);
+
+	// check for packet complete character.
+    // -1 because arrary indexing starts from 0.
+    if (dev->write_info.str[dev->write_info.len - 1] == '\n') {
+        PDEBUG("Write string complete");
+		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_info.str, dev->write_info.len);
 
 		// reset write info
 		dev->write_info.str = NULL;
@@ -239,14 +243,17 @@ static int aesd_init_module(void)
 
 	// initialise read info
 	aesd_device.read_info.read_len = 0;
-    aesd_device.read_info.complete = false;
+	aesd_device.read_info.complete = false;
 
 	// initialise write info
 	aesd_device.write_info.str = NULL;
 	aesd_device.write_info.len = 0;
 	aesd_device.write_info.partial_flag = false;
 
+	// initialise circular buffer
 	aesd_circular_buffer_init(&aesd_device.circular_buffer);
+
+	// iniialise mutex
 	mutex_init(&aesd_device.lock);
 
 	result = aesd_setup_cdev(&aesd_device);
