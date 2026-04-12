@@ -55,6 +55,8 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 	// so you return the number of bytes read, and the next user call must
 	// see a return value of 0, indicating no more data to read.
 	if (dev->read_info.complete) {
+		// reset total read length and flag for next read.
+		dev->read_info.read_len = 0;
 		dev->read_info.complete = false;
 		return 0;
 	}
@@ -63,7 +65,6 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 		return -ERESTARTSYS;
 	}
 
-	dev->read_info.read_len = 0;
 	size_t offset_return = 0;
 
 	while (dev->read_info.read_len <= count) {
@@ -73,6 +74,8 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 				&(dev->circular_buffer), *f_pos + dev->read_info.read_len,
 				&offset_return);
 		if (read_entry == NULL) {
+            // not reseting the read len here because we need to return read len
+            // this call, and return 0 next, at which point we can reset read len.
 			dev->read_info.complete = true;
 			goto exit;
 		}
@@ -92,7 +95,7 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 
 		dev->read_info.read_len += len;
 
-		PDEBUG("len total %zu", dev->read_info.read_len);
+		PDEBUG("len %zu, read length %zu", len, dev->read_info.read_len);
 	}
 
 exit:
@@ -144,16 +147,16 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	PDEBUG("write %zu bytes with offset %lld (ignored)", count, *f_pos);
 
 	ssize_t retval = 0;
-    const size_t string_len = count + 1; // + 1 for NULL terminator
+	const size_t string_len = count + 1; // + 1 for NULL terminator
 
 	const bool new_write = (dev->write_info.str == NULL) & (!dev->write_info.partial_flag) &
 			       (dev->write_info.str == 0);
 	if (new_write) {
 		PDEBUG("New write");
-		dev->write_info.str = kmalloc(string_len , GFP_KERNEL);
+		dev->write_info.str = kmalloc(string_len, GFP_KERNEL);
 	} else {
 		PDEBUG("Conituning a partial write");
-        // write.info.len is an accumilation of count.
+		// write.info.len is an accumilation of count.
 		dev->write_info.str =
 			krealloc(dev->write_info.str, dev->write_info.len + string_len, GFP_KERNEL);
 	}
@@ -163,12 +166,12 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 		goto exit;
 	}
 
-    // NOTE: write_info.str + write_info.len will point to the NULL character always.
+	// NOTE: write_info.str + write_info.len will point to the NULL character always.
 
 	// Set newly allocated memory to 0.
-    // we are always allocating count + 1, and need to ensure the terminator is NULL.
+	// we are always allocating count + 1, and need to ensure the terminator is NULL.
 	memset(dev->write_info.str + dev->write_info.len, 0, string_len);
-  
+
 	if (copy_from_user(dev->write_info.str + dev->write_info.len, buf, count)) {
 		kfree(dev->write_info.str);
 		retval = -EFAULT;
@@ -179,10 +182,11 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	dev->write_info.len += count;
 
 	// check for packet complete character.
-    // -1 because arrary indexing starts from 0.
-    if (dev->write_info.str[dev->write_info.len - 1] == '\n') {
-        PDEBUG("Write string complete");
-		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_info.str, dev->write_info.len);
+	// -1 because arrary indexing starts from 0.
+	if (dev->write_info.str[dev->write_info.len - 1] == '\n') {
+		PDEBUG("Write string complete");
+		write_circular_buffer_packet(&(dev->circular_buffer), dev->write_info.str,
+					     dev->write_info.len);
 
 		// reset write info
 		dev->write_info.str = NULL;
