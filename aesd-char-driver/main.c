@@ -51,55 +51,50 @@ static ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff
 	ssize_t retval = -ENOMEM;
 	struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
-	// This is for the case where you read and there is no more data to be read
-	// so you return the number of bytes read, and the next user call must
-	// see a return value of 0, indicating no more data to read.
-	if (dev->read_info.complete) {
-		// reset total read length and flag for next read.
-		dev->read_info.read_len = 0;
-		dev->read_info.complete = false;
-		return 0;
-	}
-
 	if (mutex_lock_interruptible(&dev->lock) != 0) {
 		return -ERESTARTSYS;
 	}
 
+	size_t bytes_read = 0;
+
+	// This is for the case where you read and there is no more data to be read
+	// so you return the number of bytes read, and the next user call must
+	// see a return value of 0, indicating no more data to read.
+	if (dev->read_info.complete) {
+		dev->read_info.complete = false;
+		goto exit;
+	}
+
 	size_t offset_return = 0;
 
-	while (dev->read_info.read_len <= count) {
+	while (bytes_read <= count) {
 		// -1 because offset starts from 0 (for each buffer entry).
 		struct aesd_buffer_entry *read_entry =
-			aesd_circular_buffer_find_entry_offset_for_fpos(
-				&(dev->circular_buffer), *f_pos + dev->read_info.read_len,
-				&offset_return);
+			aesd_circular_buffer_find_entry_offset_for_fpos(&(dev->circular_buffer),
+									*f_pos + bytes_read, &offset_return);
 		if (read_entry == NULL) {
-            // not reseting the read len here because we need to return read len
-            // this call, and return 0 next, at which point we can reset read len.
 			dev->read_info.complete = true;
 			goto exit;
 		}
 
-		const size_t len = min(count - dev->read_info.read_len, read_entry->size);
+		const size_t len = min(count - bytes_read, read_entry->size - offset_return);
 		if (len == 0) {
+			// User buffer is full and there is more to read.
 			goto exit;
 		}
 
-		PDEBUG("Found entry %s, attempting to copy %zu bytes to user buffer",
-		       read_entry->buffptr, len);
-		if (copy_to_user(buf + dev->read_info.read_len, read_entry->buffptr, len)) {
+		if (copy_to_user(buf + bytes_read, read_entry->buffptr + offset_return, len)) {
 			goto exit;
 		}
 
-		PDEBUG("Saved entry %s", read_entry->buffptr);
+		bytes_read += len;
 
-		dev->read_info.read_len += len;
-
-		PDEBUG("len %zu, read length %zu", len, dev->read_info.read_len);
+		PDEBUG("len %zu, bytes read %zu", len, bytes_read);
 	}
 
 exit:
-	retval = dev->read_info.read_len;
+    retval = bytes_read;
+	*f_pos += bytes_read;
 	mutex_unlock(&dev->lock);
 	return retval;
 }
@@ -112,7 +107,7 @@ static void write_circular_buffer_packet(struct aesd_circular_buffer *buffer, co
 		.size = count,
 	};
 
-	PDEBUG("Adding %s (len %zu) to circular buffer", entry.buffptr, entry.size);
+	// PDEBUG("Adding %s (len %zu) to circular buffer", entry.buffptr, entry.size);
 
 	const char *free_bufferptr = aesd_circular_buffer_add_entry(buffer, &entry);
 	if (free_bufferptr != NULL) {
@@ -201,7 +196,7 @@ static ssize_t aesd_write(struct file *filp, const char __user *buf, size_t coun
 	retval = count;
 
 exit:
-	print_circular_buffer(&(dev->circular_buffer));
+	// print_circular_buffer(&(dev->circular_buffer));
 	mutex_unlock(&dev->lock);
 	return retval;
 }

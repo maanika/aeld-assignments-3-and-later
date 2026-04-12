@@ -24,6 +24,9 @@
 #define MAX_RECV_SIZE 1024
 #define BUFFER_SIZE 1024
 
+// TODO: this is a temp workaround buildroot not setting the flag
+#define USE_AESD_CHAR_DEVICE 1
+
 #ifdef USE_AESD_CHAR_DEVICE
 const char *file = "/dev/aesdchar";
 #else
