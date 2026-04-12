@@ -46,7 +46,9 @@ aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buf
 	uint8_t index = buffer->out_offs; // need to start at out offset
 	for (uint8_t count = 0; count < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; count++) {
 		entry = &((buffer)->entry[index]);
-		if (!entry) {
+
+        // Must check if allocated memory pointer is NULL (entry itself is already allocated).
+		if (entry->buffptr == NULL) {
 			break;
 		}
 
