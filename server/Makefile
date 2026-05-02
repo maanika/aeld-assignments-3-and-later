@@ -19,7 +19,7 @@ aesdsocket: aesdsocket.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o aesdsocket aesdsocket.o
 
 aesdsocket.o: aesdsocket.c
-	$(CC) -I./ $(CFLAGS) -c aesdsocket.c -o aesdsocket.o
+	$(CC) -I./ -I./../aesd-char-driver $(CFLAGS) -c aesdsocket.c -o aesdsocket.o
 
 clean:
 	rm -f aesdsocket
